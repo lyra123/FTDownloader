@@ -6,7 +6,6 @@ import pandas as pd
 import json
 from tqdm.asyncio import tqdm_asyncio
 
-# Helper to clean FapTap titles
 def clean_title(title: str) -> str:
     return re.sub(r'\s*FapTap\s*', '', title).strip()
 
@@ -73,16 +72,12 @@ async def main():
         csv_file = f"{title}.csv"
         funscript_file = f"{title}.funscript"
 
-        # Download CSV
         await download_file(session, script_url, csv_file)
 
-        # Convert CSV -> Funscript
         csv_to_funscript(csv_file, funscript_file)
 
-        # Remove original CSV
         os.remove(csv_file)
 
-        # Handle self-hosted video
         video_iframe_url = data.get('stream_url_selfhosted')
         if video_iframe_url:
             choice = input("Self-hosted video found. Download video? (Y/N): ").strip().lower()
@@ -116,5 +111,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        pass  # Allow Ctrl+C to exit cleanly
+        pass  
+
     input("\nPress any key to exit...")
