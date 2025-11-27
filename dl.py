@@ -4,6 +4,7 @@ import re
 import os
 import pandas as pd
 import json
+import sys
 from tqdm.asyncio import tqdm_asyncio
 from colorama import Fore, Style, init
 import textwrap
@@ -43,14 +44,16 @@ async def download_file(session, url, filename=None):
                 now = time.time()
                 if total_size and (now - last_update_time) >= 0.2:
                     percent = downloaded / total_size * 100
-                    print(f"\r{Fore.CYAN}{filename}: {percent:.2f}% [{downloaded}/{total_size} bytes]", end='')
+                    sys.stdout.write(f"\r{Fore.CYAN}{filename}: {percent:.2f}% [{downloaded}/{total_size} bytes]")
+                    sys.stdout.flush()
                     last_update_time = now
 
         if total_size:
             percent = downloaded / total_size * 100
-            print(f"\r{Fore.CYAN}{filename}: {percent:.2f}% [{downloaded}/{total_size} bytes]")
+            sys.stdout.write(f"\r{Fore.CYAN}{filename}: {percent:.2f}% [{downloaded}/{total_size} bytes]\n")
+            sys.stdout.flush()
 
-        print(f"\n{Fore.GREEN}✅ Finished downloading {filename}")
+        print(f"{Fore.GREEN}✅ Finished downloading {filename}")
     return filename
 
 def csv_to_funscript(csv_file, output_file):
@@ -71,7 +74,7 @@ def csv_to_funscript(csv_file, output_file):
         funscript_data["actions"].append({"pos": int(row['value']), "at": int(row['time'])})
 
     with open(output_file, 'w') as f:
-        json.dump(funscript_data, f, indent=4)
+        json.dump(funscript_data, f, separators=(',', ':'))
     print(f"{Fore.GREEN}✅ Converted {csv_file} to {output_file}")
 
 async def process_video(session, video_id, auto_download, highest_quality):
