@@ -1,20 +1,55 @@
-# FTDownloader
-A private script and video downloader for FapTap, built in Python. I suggest placing this file into its own folder because downloaded content will appear next to it in the same directory.
+# FapTap Video Downloader
 
-This is tested to run on the latest version of Python with requirements installed. 
+A robust Python script for downloading videos and funscripts from FapTap.net. Supports both single video downloads and bulk downloading from a list.
 
-Usage (python):
-```sh
-pip install -r requirements.txt
+## Features
+
+-   **Single & Bulk Download**: Download individual videos or process a list of URLs.
+-   **Auto-Download**: Option to automatically download the highest quality video available.
+-   **Funscript Support**: Automatically downloads and converts scripts to `.funscript` format. Now 63.7% smaller filesizes.
+-   **Smart Logging**: 
+    -   Detailed `debug.txt` log with download speeds and progress.
+    -   `failed_video_downloads.txt` tracks any failed URLs.
+-   **Visual Feedback**:
+    -   Clean console output with color-coded status.
+    -   "In Progress..." heartbeat indicator during bulk downloads.
+-   **Reliability**:
+    -   Network timeouts to prevent hangs.
+    -   Automatic retries and error handling.
+
+## Installation
+
+1.  **Install Python 3.8+**
+2.  **Install Dependencies**:
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+## Usage
+
+Run the script:
+```bash
 python dl.py
 ```
-For bulk downloading, you will need to create a 'bulk.txt' file in same directory as .exe or where you execute the python script from. Links should be line separated like in the example provided. When prompted for a FapTap link, type 'bulk' to access this feature.
 
-Auto-download (Y/N) - choose if you want videos to automatically download from the bulk list (highest quality available). If you choose no, you will have to manually prompt yes or no for each link IF a video is found.
+### Modes
 
-When bulk downloading, any videos NOT found will be put into a list (failed_video_downloads.txt). This is created automatically in the same directory as the .exe. The process would then be to look through the video list manually and find them by scouring the internet far and wide, as I cannot automate this. After you have found everything in the list, you can delete that file because it will regenerate when needed for the next bulk command. :)
+1.  **Single Video**: Paste a FapTap video URL when prompted.
+2.  **Bulk Download**:
+    -   Create a text file (e.g., `bulk.txt`) with one FapTap URL per line.
+    -   Enter `bulk` when prompted.
+    -   Follow the prompts for output directory and concurrency.
 
-## Options to run this script
-1. **Win/Mac/Linux Users** can run from the source code with python on any machine after installing requirements.
-2. **Windows Users** can use the standalone .exe binary provided in releases without installing anything.
-3. **Mac Users** can use the standalone .dmg binary provided in releases without installing anything
+### Output Structure
+
+Files are saved to your specified output directory:
+-   `[Title].mp4`: The video file.
+-   `[Title].funscript`: The synchronized script (compact).
+-   `debug.txt`: Detailed log of operations and download stats.
+-   `failed_video_downloads.txt`: List of URLs that failed to process.
+
+## Troubleshooting
+
+-   **Hangs**: If a download seems stuck, check `debug.txt` for the latest progress and speed. The script has a 30-minute timeout to prevent infinite hangs.
+-   **Missing Videos**: If a video is not found, the status will show `❌ Video`. Check `failed_video_downloads.txt` for a list of these URLs.
+-   **Issues**: If you encounter bugs, please check `debug.txt` and include relevant sections when reporting the issue.
