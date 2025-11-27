@@ -10,7 +10,6 @@ from tqdm import tqdm
 from colorama import Fore, init
 import time
 
-# Maximum number of concurrent downloads in bulk mode (default)
 DEFAULT_CONCURRENT_DOWNLOADS = 3
 
 init(autoreset=True)
@@ -278,7 +277,6 @@ async def bulk_download(session, file_name, auto_download, highest_quality, max_
                 async with lock:
                     completed += 1
                     
-                    # Build status line
                     if status and status.get('title'):
                         title = status['title'][:50] + '...' if len(status['title']) > 50 else status['title']
                         parts = [f"{Fore.GREEN}[{completed}/{total}] {title}"]
@@ -321,14 +319,12 @@ async def bulk_download(session, file_name, auto_download, highest_quality, max_
     print(f"{Fore.GREEN}\n✅ Bulk download complete! {completed}/{total} videos processed successfully.")
 
 def get_output_directory():
-    """Prompt user for output directory and validate it exists."""
     while True:
         output_dir = input(f"{Fore.CYAN}Enter output directory (press Enter for current directory): ").strip()
         
         if not output_dir:
             return "."
         
-        # Expand user home directory if ~ is used
         output_dir = os.path.expanduser(output_dir)
         
         if os.path.exists(output_dir) and os.path.isdir(output_dir):
@@ -347,7 +343,6 @@ def get_output_directory():
                 print(f"{Fore.YELLOW}Please enter a valid directory path.")
 
 def get_concurrent_count():
-    """Prompt user for number of concurrent downloads."""
     while True:
         count_input = input(f"{Fore.CYAN}Number of concurrent downloads (default {DEFAULT_CONCURRENT_DOWNLOADS}): ").strip()
         
