@@ -178,8 +178,32 @@ async def process_video(session, video_id, auto_download, highest_quality, show_
     async with session.get(video_iframe_url) as iframe_resp:
         iframe_html = await iframe_resp.text()
 
-    mp4_matches = re.findall(r'https://[^"]+/play_(\d+)p\.mp4', iframe_html)
-    qualities = sorted(list(set(mp4_matches)), key=int)
+    base_url_match = re.search(r'(https://[^"]+)/play_\d+p\.mp4', iframe_html)
+    qualities = []
+    base_video_url = None
+
+    if base_url_match:
+        base_video_url = base_url_match.group(1)
+        # Try fetching playlist.m3u8 for reliable quality discovery
+        try:
+            async with session.get(f"{base_video_url}/playlist.m3u8", headers={'Referer': 'https://faptap.net/'}) as playlist_resp:
+                if playlist_resp.status == 200:
+                    playlist_text = await playlist_resp.text()
+                    m3u8_matches = re.findall(r'(\d+)p/video\.m3u8', playlist_text)
+                    if m3u8_matches:
+                        qualities = sorted(list(set(m3u8_matches)), key=int)
+        except Exception as e:
+            log_debug(f"Failed to fetch playlist.m3u8: {e}", output_dir)
+
+    if not qualities:
+        mp4_matches = re.findall(r'https://[^"]+/play_(\d+)p\.mp4', iframe_html)
+        qualities = sorted(list(set(mp4_matches)), key=int)
+
+    # Filter to preferred quality tiers only
+    preferred_tiers = ['1080', '720', '480', '360', '240']
+    filtered = [q for q in qualities if q in preferred_tiers]
+    if filtered:
+        qualities = sorted(filtered, key=int)
 
     if not qualities:
         error_msg = "No downloadable video found"
@@ -190,50 +214,76 @@ async def process_video(session, video_id, auto_download, highest_quality, show_
         return status
         
     if auto_download:
-        selected_quality = qualities[-1]
-        status['quality'] = f"{selected_quality}p"
-        if show_progress:
-            print(f"{Fore.YELLOW}Auto-selected video quality: {selected_quality}p")
-
-        mp4_url_match = re.search(rf'(https://[^"]+/play_{selected_quality}p\.mp4)', iframe_html)
-        if mp4_url_match:
-            mp4_url = mp4_url_match.group(1)
-            video_file = os.path.join(output_dir, f"{title}.mp4")
-            try:
-                await download_file(session, mp4_url, video_file, show_progress)
-                status['video'] = True
-            except Exception as e:
-                status['error'] = f"Video download failed: {str(e)}"
-                if show_progress:
-                    print(f"{Fore.RED}❌ {status['error']}")
-        else:
-            error_msg = "Failed to find video URL"
+        for selected_quality in reversed(qualities):
+            status['quality'] = f"{selected_quality}p"
             if show_progress:
-                print(f"{Fore.RED}❌ {error_msg}")
-            status['error'] = error_msg
+                print(f"{Fore.YELLOW}Auto-selected video quality: {selected_quality}p")
+
+            mp4_url = None
+            if base_video_url:
+                mp4_url = f"{base_video_url}/play_{selected_quality}p.mp4"
+            else:
+                mp4_url_match = re.search(rf'(https://[^"]+/play_{selected_quality}p\.mp4)', iframe_html)
+                if mp4_url_match:
+                    mp4_url = mp4_url_match.group(1)
+                    
+            if mp4_url:
+                video_file = os.path.join(output_dir, f"{title}.mp4")
+                try:
+                    await download_file(session, mp4_url, video_file, show_progress)
+                    status['video'] = True
+                    status['error'] = None # Clear any previous error
+                    break # Success, we have our file
+                except Exception as e:
+                    status['error'] = f"Video download failed ({selected_quality}p): {str(e)}"
+                    if show_progress:
+                        print(f"{Fore.RED}⚠️ {status['error']} - Trying next quality...")
+                    # Allow loop to try the next quality
+            else:
+                error_msg = f"Failed to find video URL for {selected_quality}p"
+                status['error'] = error_msg
+                if show_progress:
+                    print(f"{Fore.RED}⚠️ {error_msg} - Trying next quality...")
+
+        if not status.get('video'):
+            if show_progress:
+                print(f"{Fore.RED}❌ All quality downloads failed.")
             log_failed_download(source_url, output_dir)
+            
         return status
         
     manual_download = input(f"{Fore.YELLOW}Self-hosted video found for {title}. Download video? (Y/N): ").strip().lower() == 'y'
     if manual_download:
-        selected_quality = qualities[-1]
-        status['quality'] = f"{selected_quality}p"
-        mp4_url_match = re.search(rf'(https://[^"]+/play_{selected_quality}p\.mp4)', iframe_html)
-        if mp4_url_match:
-            mp4_url = mp4_url_match.group(1)
-            video_file = os.path.join(output_dir, f"{title}.mp4")
-            try:
-                await download_file(session, mp4_url, video_file, show_progress)
-                status['video'] = True
-            except Exception as e:
-                status['error'] = f"Video download failed: {str(e)}"
+        for selected_quality in reversed(qualities):
+            status['quality'] = f"{selected_quality}p"
+            mp4_url = None
+            if base_video_url:
+                mp4_url = f"{base_video_url}/play_{selected_quality}p.mp4"
+            else:
+                mp4_url_match = re.search(rf'(https://[^"]+/play_{selected_quality}p\.mp4)', iframe_html)
+                if mp4_url_match:
+                    mp4_url = mp4_url_match.group(1)
+                    
+            if mp4_url:
+                video_file = os.path.join(output_dir, f"{title}.mp4")
+                try:
+                    await download_file(session, mp4_url, video_file, show_progress)
+                    status['video'] = True
+                    status['error'] = None
+                    break
+                except Exception as e:
+                    status['error'] = f"Video download failed ({selected_quality}p): {str(e)}"
+                    if show_progress:
+                        print(f"{Fore.RED}⚠️ {status['error']} - Trying next quality...")
+            else:
+                error_msg = f"Failed to find video URL for {selected_quality}p"
+                status['error'] = error_msg
                 if show_progress:
-                    print(f"{Fore.RED}❌ {status['error']}")
-        else:
-            error_msg = "Failed to find video URL"
+                    print(f"{Fore.RED}⚠️ {error_msg} - Trying next quality...")
+
+        if not status.get('video'):
             if show_progress:
-                print(f"{Fore.RED}❌ {error_msg}")
-            status['error'] = error_msg
+                print(f"{Fore.RED}❌ All quality downloads failed.")
             log_failed_download(source_url, output_dir)
     
     return status
@@ -300,7 +350,8 @@ async def bulk_download(session, file_name, auto_download, highest_quality, max_
                         
                         tqdm.write(" - ".join(parts))
                     else:
-                        tqdm.write(f"{Fore.RED}[{completed}/{total}] Failed to process video {video_id}")
+                        error_reason = status.get('error', 'Unknown error') if status else 'Unknown error'
+                        tqdm.write(f"{Fore.RED}[{completed}/{total}] Failed to process video {video_id}: {error_reason}")
             else:
                 async with lock:
                     completed += 1
