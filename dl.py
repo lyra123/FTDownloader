@@ -289,6 +289,12 @@ async def process_video(session, video_id, auto_download, highest_quality, show_
     return status
 
 async def bulk_download(session, file_name, auto_download, highest_quality, max_concurrent, output_dir):
+    if not os.path.exists(file_name):
+        with open(file_name, 'w') as f:
+            pass
+        print(f"{Fore.YELLOW}[INFO] {file_name} not found. Created an empty one.")
+        return
+
     with open(file_name, 'r') as f:
         links = [line.strip() for line in f if line.strip()]
 
@@ -349,6 +355,18 @@ async def bulk_download(session, file_name, auto_download, highest_quality, max_
                             parts.append(" | ".join(status_items))
                         
                         tqdm.write(" - ".join(parts))
+
+                        # Remove link from bulk.txt if successful
+                        if status.get('funscript') and (not auto_download or status.get('video')):
+                            try:
+                                with open(file_name, 'r') as f:
+                                    lines = f.readlines()
+                                with open(file_name, 'w') as f:
+                                    for line_content in lines:
+                                        if line_content.strip() != link:
+                                            f.write(line_content)
+                            except Exception as e:
+                                tqdm.write(f"{Fore.RED}Error updating {file_name}: {e}")
                     else:
                         error_reason = status.get('error', 'Unknown error') if status else 'Unknown error'
                         tqdm.write(f"{Fore.RED}[{completed}/{total}] Failed to process video {video_id}: {error_reason}")
