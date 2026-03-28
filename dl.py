@@ -179,7 +179,7 @@ async def process_video(session, video_id, auto_download, highest_quality, show_
         iframe_html = await iframe_resp.text()
 
     mp4_matches = re.findall(r'https://[^"]+/play_(\d+)p\.mp4', iframe_html)
-    qualities = sorted(list(set(mp4_matches)))
+    qualities = sorted(list(set(mp4_matches)), key=int)
 
     if not qualities:
         error_msg = "No downloadable video found"
