@@ -167,126 +167,206 @@ async def process_video(session, video_id, auto_download, highest_quality, show_
             print(f"{Fore.RED}❌ {status['error']}")
         return status
 
-    video_iframe_url = data.get('stream_url_selfhosted')
+    # 1. Fetch available sources from FapTap's internal API for better accuracy
+    bunny_sources_url = f"https://faptap.net/api/videos/{video_id}/bunny-sources"
+    available_qualities = []
+    
+    log_debug(f"Fetching authoritative sources from: {bunny_sources_url}", output_dir)
+    
+    try:
+        async with session.get(bunny_sources_url) as bunny_resp:
+            if bunny_resp.status == 200:
+                bunny_data = await bunny_resp.json()
+                sources = bunny_data.get('data', [])
+                for source in sources:
+                    q = source.get('quality')
+                    if q:
+                        available_qualities.append({
+                            'quality': int(q),
+                            'url': source.get('url'),
+                            'format': source.get('format')
+                        })
+    except Exception as e:
+        log_debug(f"Failed to fetch bunny-sources: {e}", output_dir)
 
-    if not video_iframe_url:
-        if show_progress:
-            print(f"{Fore.YELLOW}⚠️ No self-hosted video source found. Only the Funscript has been downloaded.")
-        log_failed_download(source_url, output_dir)
-        return status
+    # 2. Fallback to scraping iframe if API fails or returns no sources
+    if not available_qualities:
+        video_iframe_url = data.get('stream_url_selfhosted')
+        if video_iframe_url:
+            async with session.get(video_iframe_url) as iframe_resp:
+                iframe_html = await iframe_resp.text()
 
-    async with session.get(video_iframe_url) as iframe_resp:
-        iframe_html = await iframe_resp.text()
+            base_url_match = re.search(r'(https://[^"]+)/play_\d+p\.mp4', iframe_html)
+            base_video_url = base_url_match.group(1) if base_url_match else None
+            
+            # Try playlist.m3u8 for discovery
+            if base_video_url:
+                try:
+                    async with session.get(f"{base_video_url}/playlist.m3u8", headers={'Referer': 'https://faptap.net/'}) as playlist_resp:
+                        if playlist_resp.status == 200:
+                            playlist_text = await playlist_resp.text()
+                            m3u8_matches = re.findall(r'(\d+)p/video\.m3u8', playlist_text)
+                            for q in set(m3u8_matches):
+                                available_qualities.append({
+                                    'quality': int(q),
+                                    'url': f"{base_video_url}/{q}p/video.m3u8",
+                                    'format': 'hls'
+                                })
+                except Exception as e:
+                    log_debug(f"Failed to scrape playlist.m3u8: {e}", output_dir)
+            
+            # Last resort: direct .mp4 matches in iframe HTML
+            if not available_qualities:
+                mp4_matches = re.findall(r'https://[^"]+/play_(\d+)p\.mp4', iframe_html)
+                for q in set(mp4_matches):
+                    available_qualities.append({
+                        'quality': int(q),
+                        'url': f"{base_video_url}/play_{q}p.mp4" if base_video_url else None,
+                        'format': 'mp4'
+                    })
 
-    base_url_match = re.search(r'(https://[^"]+)/play_\d+p\.mp4', iframe_html)
-    qualities = []
-    base_video_url = None
+    # Filter and sort qualities (highest first)
+    preferred_tiers = [1080, 720, 480, 360, 240]
+    available_qualities = [q for q in available_qualities if q['quality'] in preferred_tiers]
+    available_qualities.sort(key=lambda x: x['quality'], reverse=True)
 
-    if base_url_match:
-        base_video_url = base_url_match.group(1)
-        # Try fetching playlist.m3u8 for reliable quality discovery
-        try:
-            async with session.get(f"{base_video_url}/playlist.m3u8", headers={'Referer': 'https://faptap.net/'}) as playlist_resp:
-                if playlist_resp.status == 200:
-                    playlist_text = await playlist_resp.text()
-                    m3u8_matches = re.findall(r'(\d+)p/video\.m3u8', playlist_text)
-                    if m3u8_matches:
-                        qualities = sorted(list(set(m3u8_matches)), key=int)
-        except Exception as e:
-            log_debug(f"Failed to fetch playlist.m3u8: {e}", output_dir)
-
-    if not qualities:
-        mp4_matches = re.findall(r'https://[^"]+/play_(\d+)p\.mp4', iframe_html)
-        qualities = sorted(list(set(mp4_matches)), key=int)
-
-    # Filter to preferred quality tiers only
-    preferred_tiers = ['1080', '720', '480', '360', '240']
-    filtered = [q for q in qualities if q in preferred_tiers]
-    if filtered:
-        qualities = sorted(filtered, key=int)
-
-    if not qualities:
-        error_msg = "No downloadable video found"
+    if not available_qualities:
+        error_msg = "No downloadable video found (FT Server)"
         if show_progress:
             print(f"{Fore.RED}❌ {error_msg}")
         status['error'] = error_msg
         log_failed_download(source_url, output_dir)
         return status
-        
-    if auto_download:
-        for selected_quality in reversed(qualities):
-            status['quality'] = f"{selected_quality}p"
-            if show_progress:
-                print(f"{Fore.YELLOW}Auto-selected video quality: {selected_quality}p")
 
-            mp4_url = None
-            if base_video_url:
-                mp4_url = f"{base_video_url}/play_{selected_quality}p.mp4"
-            else:
-                mp4_url_match = re.search(rf'(https://[^"]+/play_{selected_quality}p\.mp4)', iframe_html)
-                if mp4_url_match:
-                    mp4_url = mp4_url_match.group(1)
-                    
-            if mp4_url:
-                video_file = os.path.join(output_dir, f"{title}.mp4")
-                try:
-                    await download_file(session, mp4_url, video_file, show_progress)
-                    status['video'] = True
-                    status['error'] = None # Clear any previous error
-                    break # Success, we have our file
-                except Exception as e:
-                    status['error'] = f"Video download failed ({selected_quality}p): {str(e)}"
-                    if show_progress:
-                        print(f"{Fore.RED}⚠️ {status['error']} - Trying next quality...")
-                    # Allow loop to try the next quality
-            else:
-                error_msg = f"Failed to find video URL for {selected_quality}p"
-                status['error'] = error_msg
+    async def try_download_quality(q_info):
+        selected_quality = q_info['quality']
+        status['quality'] = f"{selected_quality}p"
+        
+        # Determine the direct MP4 URL to try first (standard FapTap pattern)
+        # Even if the API says HLS, we check for a direct MP4 as it's faster to download
+        mp4_url = q_info['url'] if q_info['format'] == 'mp4' else None
+        if not mp4_url and q_info['url']:
+            # Try to derive the .mp4 path from the .m3u8 path
+            # Pattern: .../{quality}p/video.m3u8 -> .../play_{quality}p.mp4
+            mp4_url = q_info['url'].split('/video.m3u8')[0].rsplit('/', 1)[0] + f"/play_{selected_quality}p.mp4"
+
+        video_file = os.path.join(output_dir, f"{title}.mp4")
+        
+        # Attempt direct MP4 download first
+        if mp4_url:
+            try:
+                log_debug(f"Attempting direct MP4 download: {mp4_url}", output_dir)
+                await download_file(session, mp4_url, video_file, show_progress)
+                return True
+            except Exception as e:
+                log_debug(f"Direct MP4 download failed ({selected_quality}p): {e}", output_dir)
+
+        # Fallback to HLS download if MP4 fails or is unavailable
+        if q_info['format'] == 'hls' or 'video.m3u8' in q_info['url']:
+            try:
+                log_debug(f"Attempting HLS download: {q_info['url']}", output_dir)
                 if show_progress:
-                    print(f"{Fore.RED}⚠️ {error_msg} - Trying next quality...")
-
-        if not status.get('video'):
-            if show_progress:
-                print(f"{Fore.RED}❌ All quality downloads failed.")
-            log_failed_download(source_url, output_dir)
-            
-        return status
+                    print(f"{Fore.YELLOW}Direct MP4 unavailable for {selected_quality}p. Downloading via segments (this may take a moment)...")
+                await download_hls(session, q_info['url'], video_file, show_progress)
+                return True
+            except Exception as e:
+                log_debug(f"HLS download failed ({selected_quality}p): {e}", output_dir)
         
+        return False
+
+    if auto_download:
+        for q_info in available_qualities:
+            if await try_download_quality(q_info):
+                status['video'] = True
+                status['error'] = None
+                break
+            else:
+                status['error'] = f"Failed to download at {q_info['quality']}p"
+                if show_progress:
+                    print(f"{Fore.RED}⚠️ Failed to download {q_info['quality']}p. Trying next quality...")
+
+        if not status['video']:
+            log_failed_download(source_url, output_dir)
+        return status
+
+    # Manual Download Mode
     manual_download = input(f"{Fore.YELLOW}Self-hosted video found for {title}. Download video? (Y/N): ").strip().lower() == 'y'
     if manual_download:
-        for selected_quality in reversed(qualities):
-            status['quality'] = f"{selected_quality}p"
-            mp4_url = None
-            if base_video_url:
-                mp4_url = f"{base_video_url}/play_{selected_quality}p.mp4"
+        for q_info in available_qualities:
+            if await try_download_quality(q_info):
+                status['video'] = True
+                status['error'] = None
+                break
             else:
-                mp4_url_match = re.search(rf'(https://[^"]+/play_{selected_quality}p\.mp4)', iframe_html)
-                if mp4_url_match:
-                    mp4_url = mp4_url_match.group(1)
-                    
-            if mp4_url:
-                video_file = os.path.join(output_dir, f"{title}.mp4")
-                try:
-                    await download_file(session, mp4_url, video_file, show_progress)
-                    status['video'] = True
-                    status['error'] = None
-                    break
-                except Exception as e:
-                    status['error'] = f"Video download failed ({selected_quality}p): {str(e)}"
-                    if show_progress:
-                        print(f"{Fore.RED}⚠️ {status['error']} - Trying next quality...")
-            else:
-                error_msg = f"Failed to find video URL for {selected_quality}p"
-                status['error'] = error_msg
+                status['error'] = f"Failed to download at {q_info['quality']}p"
                 if show_progress:
-                    print(f"{Fore.RED}⚠️ {error_msg} - Trying next quality...")
-
-        if not status.get('video'):
-            if show_progress:
-                print(f"{Fore.RED}❌ All quality downloads failed.")
+                    print(f"{Fore.RED}⚠️ Failed to download {q_info['quality']}p. Trying next quality...")
+                    
+        if not status['video']:
             log_failed_download(source_url, output_dir)
     
     return status
+
+async def download_hls(session, playlist_url, output_file, show_progress=True):
+    """
+    Experimental HLS downloader that fetches segments and joins them.
+    Used as fallback when direct .mp4 links are unavailable (common for 1080p).
+    """
+    base_url = playlist_url.rsplit('/', 1)[0]
+    
+    async with session.get(playlist_url) as resp:
+        if resp.status != 200:
+            raise Exception(f"Failed to fetch playlist (HTTP {resp.status})")
+        playlist_text = await resp.text()
+
+    # Simple M3U8 segment parser
+    segments = [line.strip() for line in playlist_text.splitlines() if line and not line.startswith('#')]
+    if not segments:
+        raise Exception("No segments found in playlist")
+
+    total_segments = len(segments)
+    basename = os.path.basename(output_file)
+    
+    # Track progress
+    pbar = None
+    if show_progress:
+        pbar = tqdm(total=total_segments, desc=f"{Fore.CYAN}Downloading {basename}", unit="seg")
+
+    # Download segments with a semaphore to limit concurrency
+    semaphore = asyncio.Semaphore(10)
+    
+    async def download_segment(segment_url, index):
+        if not segment_url.startswith('http'):
+            segment_url = f"{base_url}/{segment_url}"
+            
+        async with semaphore:
+            for attempt in range(3): # Simple retry logic
+                try:
+                    async with session.get(segment_url) as resp:
+                        if resp.status == 200:
+                            data = await resp.read()
+                            if pbar: pbar.update(1)
+                            return index, data
+                except Exception:
+                    await asyncio.sleep(1)
+            raise Exception(f"Failed to download segment {index} after retries")
+
+    # Execute downloads
+    tasks = [download_segment(url, i) for i, url in enumerate(segments)]
+    results = await asyncio.gather(*tasks)
+    
+    # Sort results by index to ensure correct order
+    results.sort(key=lambda x: x[0])
+    
+    # Write segments sequentially
+    with open(output_file, 'wb') as f:
+        for _, segment_data in results:
+            f.write(segment_data)
+
+    if pbar:
+        pbar.close()
+        print(f"{Fore.GREEN}✅ Finished assembling HLS stream: {basename}")
+
 
 async def bulk_download(session, file_name, auto_download, highest_quality, max_concurrent, output_dir):
     if not os.path.exists(file_name):
