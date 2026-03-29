@@ -225,9 +225,7 @@ async def process_video(session, video_id, auto_download, highest_quality, show_
                         'format': 'mp4'
                     })
 
-    # Filter and sort qualities (highest first)
-    preferred_tiers = [1080, 720, 480, 360, 240]
-    available_qualities = [q for q in available_qualities if q['quality'] in preferred_tiers]
+    # Sort qualities (highest first)
     available_qualities.sort(key=lambda x: x['quality'], reverse=True)
 
     if not available_qualities:
@@ -243,12 +241,20 @@ async def process_video(session, video_id, auto_download, highest_quality, show_
         status['quality'] = f"{selected_quality}p"
         
         # Determine the direct MP4 URL to try first (standard FapTap pattern)
-        # Even if the API says HLS, we check for a direct MP4 as it's faster to download
         mp4_url = q_info['url'] if q_info['format'] == 'mp4' else None
+        
         if not mp4_url and q_info['url']:
-            # Try to derive the .mp4 path from the .m3u8 path
-            # Pattern: .../{quality}p/video.m3u8 -> .../play_{quality}p.mp4
-            mp4_url = q_info['url'].split('/video.m3u8')[0].rsplit('/', 1)[0] + f"/play_{selected_quality}p.mp4"
+            # Try to extract the quality label (e.g., "720") directly from the URL
+            # High-quality sources often have a folder like /720p/video.m3u8
+            q_label = re.search(r'/(\d+)p/', q_info['url'])
+            label_str = q_label.group(1) if q_label else str(selected_quality)
+            
+            # Pattern: .../base/video.m3u8 -> .../play_{label}p.mp4
+            if '/video.m3u8' in q_info['url']:
+                mp4_url = q_info['url'].split('/video.m3u8')[0].rsplit('/', 1)[0] + f"/play_{label_str}p.mp4"
+            else:
+                # Fallback pattern if URL structure is different
+                mp4_url = q_info['url'].rsplit('/', 1)[0] + f"/play_{label_str}p.mp4"
 
         video_file = os.path.join(output_dir, f"{title}.mp4")
         
@@ -259,7 +265,7 @@ async def process_video(session, video_id, auto_download, highest_quality, show_
                 await download_file(session, mp4_url, video_file, show_progress)
                 return True
             except Exception as e:
-                log_debug(f"Direct MP4 download failed ({selected_quality}p): {e}", output_dir)
+                log_debug(f"Direct MP4 download failed ({label_str}p): {e}", output_dir)
 
         # Fallback to HLS download if MP4 fails or is unavailable
         if q_info['format'] == 'hls' or 'video.m3u8' in q_info['url']:
