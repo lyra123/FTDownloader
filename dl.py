@@ -22,14 +22,14 @@ def safe_filename(name: str) -> str:
 
 def log_failed_download(url: str, output_dir: str = "."):
     log_file = os.path.join(output_dir, "failed_video_downloads.txt")
-    with open(log_file, "a") as f:
+    with open(log_file, "a", encoding='utf-8') as f:
         f.write(url + "\n")
 
 def log_debug(message: str, output_dir: str = "."):
     log_file = os.path.join(output_dir, "debug.txt")
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     try:
-        with open(log_file, "a") as f:
+        with open(log_file, "a", encoding='utf-8') as f:
             f.write(f"[{timestamp}] {message}\n")
     except Exception as e:
         print(f"Failed to write to debug log: {e}")
@@ -99,7 +99,7 @@ async def download_file(session, url, filename=None, show_progress=True):
     return filename
 
 def csv_to_funscript(csv_file, output_file, show_message=True):
-    with open(csv_file, 'r') as f:
+    with open(csv_file, 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
         rows = list(reader)
     
@@ -113,7 +113,7 @@ def csv_to_funscript(csv_file, output_file, show_message=True):
         "actions": [{"pos": int(row[1]), "at": int(row[0])} for row in rows]
     }
 
-    with open(output_file, 'w') as f:
+    with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(funscript_data, f, separators=(',', ':'))
     if show_message:
         print(f"{Fore.GREEN}✅ Converted {csv_file} to {output_file}")
@@ -135,6 +135,13 @@ async def process_video(session, video_id, auto_download, highest_quality, show_
     
     log_debug(f"Fetching metadata for video ID: {video_id}", output_dir)
     
+    # Warm up session and obtain required track_token cookie from FapTap page
+    try:
+        async with session.get(source_url) as page_resp:
+            pass
+    except Exception as e:
+        log_debug(f"Warning: Failed to visit source URL {source_url}: {e}", output_dir)
+
     async with session.get(api_url) as resp:
         if resp.status != 200:
             error_msg = f"Failed to fetch metadata ({resp.status})"
@@ -165,7 +172,6 @@ async def process_video(session, video_id, auto_download, highest_quality, show_
         status['error'] = f"Funscript download failed: {str(e)}"
         if show_progress:
             print(f"{Fore.RED}❌ {status['error']}")
-        return status
 
     # 1. Fetch available sources from FapTap's internal API for better accuracy
     bunny_sources_url = f"https://faptap.net/api/videos/{video_id}/bunny-sources"
@@ -376,12 +382,12 @@ async def download_hls(session, playlist_url, output_file, show_progress=True):
 
 async def bulk_download(session, file_name, auto_download, highest_quality, max_concurrent, output_dir):
     if not os.path.exists(file_name):
-        with open(file_name, 'w') as f:
+        with open(file_name, 'w', encoding='utf-8') as f:
             pass
         print(f"{Fore.YELLOW}[INFO] {file_name} not found. Created an empty one.")
         return
 
-    with open(file_name, 'r') as f:
+    with open(file_name, 'r', encoding='utf-8') as f:
         links = [line.strip() for line in f if line.strip()]
 
     total = len(links)
@@ -445,9 +451,9 @@ async def bulk_download(session, file_name, auto_download, highest_quality, max_
                         # Remove link from bulk.txt if successful
                         if status.get('funscript') and (not auto_download or status.get('video')):
                             try:
-                                with open(file_name, 'r') as f:
+                                with open(file_name, 'r', encoding='utf-8') as f:
                                     lines = f.readlines()
-                                with open(file_name, 'w') as f:
+                                with open(file_name, 'w', encoding='utf-8') as f:
                                     for line_content in lines:
                                         if line_content.strip() != link:
                                             f.write(line_content)
@@ -526,7 +532,10 @@ async def main():
     # total=None disables the total timeout (important for large files).
     # sock_read=1800 sets a 30-minute timeout for reading data from the socket.
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=1800)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
         if choice == 'bulk':
             output_dir = get_output_directory()
             max_concurrent = get_concurrent_count()
